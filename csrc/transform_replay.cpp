@@ -1312,71 +1312,6 @@ void MostInlinedTransformPropagator::propagateSibling(
   }
 }
 
-namespace {
-
-// Replays transformations in `old_domain` on `new_root` and returns the new
-// TensorDomain that's rooted at `new_root`. This shares quite some code with
-// TransformReplay::fullSelfReplay, which can be cleaned up. The main
-// challenge for that is that this function uses `ReplayTransformations` and
-// `fullSelfReplay` uses `ReplaySelf`, a simplified version of
-// `ReplayTransformations` leveraging the fact that it's a self-replay.
-TensorDomain* fullReplay(
-    const TensorDomain* old_domain,
-    const std::vector<IterDomain*>& new_root) {
-  std::unordered_map<IterDomain*, IterDomain*> old_root_to_new;
-  NVF_CHECK(
-      old_domain->maybeRoot().size() == new_root.size(),
-      "Unable to replay transformations on a root domain of different size: ",
-      old_domain->maybeRoot().size(),
-      " vs ",
-      new_root.size());
-  for (auto i : c10::irange(new_root.size())) {
-    old_root_to_new[old_domain->maybeRoot()[i]] = new_root[i];
-  }
-  NVF_CHECK(
-      !old_domain->hasAllocation(),
-      "Due to #986, the allocation domain may or may not be between root and "
-      "loop. So, when `old_domain` has allocation, it may be incorrect to "
-      "use its loop as the target domain: ",
-      old_domain->toString(0, /*loop_only=*/false));
-  ReplayTransformations replay(old_domain->loop(), old_root_to_new);
-  replay.setReplayRFactor(true);
-
-  std::vector<IterDomain*> new_loop;
-  new_loop.reserve(old_domain->nDims());
-  std::transform(
-      old_domain->loop().begin(),
-      old_domain->loop().end(),
-      std::back_inserter(new_loop),
-      [&](IterDomain* old_loop_id) {
-        return replay.getReplay().at(old_loop_id);
-      });
-
-  if (!old_domain->hasRoot()) {
-    return IrBuilder::createInContainer<TensorDomain>(
-        old_domain->container(), new_root, new_loop, old_domain->contiguity());
-  }
-
-  std::vector<IterDomain*> new_logical;
-  new_logical.reserve(old_domain->logical().size());
-  std::transform(
-      old_domain->logical().begin(),
-      old_domain->logical().end(),
-      std::back_inserter(new_logical),
-      [&](IterDomain* old_logical_id) {
-        return replay.getReplay().at(old_logical_id);
-      });
-
-  return IrBuilder::createInContainer<TensorDomain>(
-      old_domain->container(),
-      new_root,
-      new_logical,
-      new_loop,
-      old_domain->contiguity());
-}
-
-} // namespace
-
 Expr* replayExprWithNewInput(Expr* e, Val* new_in) {
   auto* new_in_tv = dynamic_cast<TensorView*>(new_in);
   NVF_CHECK(
@@ -1408,7 +1343,9 @@ Expr* replayExprWithNewInput(Expr* e, Val* new_in) {
               .build());
       i++;
     }
-    TensorDomain* new_domain = fullReplay(old_domain, new_out_root);
+    auto* new_domain = IrBuilder::create<TensorDomain>(
+        new_out_root, new_out_root, new_out_root);
+    new_domain = TransformReplay::fullSelfReplay(old_domain, new_domain);
     TensorView* new_out_tv =
         IrBuilder::create<TensorView>(new_domain, *old_out->getDataType());
     new_outs.push_back(new_out_tv);
