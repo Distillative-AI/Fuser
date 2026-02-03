@@ -99,104 +99,203 @@ TEST_F(Phase2ContainerTest, FusionRegistration) {
   // Get the IrContainer through Fusion
   auto& container = *fusion.ir_container();
 
-  // Initially no Fusions registered (Phase 1 doesn't use registration yet)
-  EXPECT_EQ(container.sharingCount(), 0);
-
-  // Register the Fusion
-  container.addFusion(&fusion);
+  // With Phase 2, Fusion constructor calls addFusion(this), so count starts at
+  // 1
   EXPECT_EQ(container.sharingCount(), 1);
   EXPECT_FALSE(container.hasMultipleFusions());
 
-  // Create another Fusion and register it with the same container
+  // Register another Fusion with the same container
   // (simulating shared_ptr sharing that will happen in later tasks)
   Fusion fusion2;
   container.addFusion(&fusion2);
   EXPECT_EQ(container.sharingCount(), 2);
   EXPECT_TRUE(container.hasMultipleFusions());
 
-  // Remove one
+  // Remove the manually added one
   container.removeFusion(&fusion2);
   EXPECT_EQ(container.sharingCount(), 1);
   EXPECT_FALSE(container.hasMultipleFusions());
 
-  // Remove the other
-  container.removeFusion(&fusion);
-  EXPECT_EQ(container.sharingCount(), 0);
+  // Note: Don't remove fusion here - its destructor will handle that
+  // If we remove it manually, the destructor will try to remove again
 }
 
 TEST_F(Phase2ContainerTest, FusionTransfer) {
   // Test transferFusion correctly updates tracking
+  // Note: We use an IrContainer directly to test the transfer mechanism
+  // without interference from Fusion's auto-registration
+
+  auto container = std::make_shared<IrContainer>();
+
+  // Create dummy fusion pointers for testing (not real Fusions)
   Fusion fusion1;
   Fusion fusion2;
 
-  auto& container = *fusion1.ir_container();
-
-  // Register fusion1
-  container.addFusion(&fusion1);
-  EXPECT_EQ(container.sharingCount(), 1);
-  EXPECT_TRUE(container.sharingFusions().count(&fusion1) > 0);
-  EXPECT_TRUE(container.sharingFusions().count(&fusion2) == 0);
+  // Register fusion1 with test container
+  container->addFusion(&fusion1);
+  EXPECT_EQ(container->sharingCount(), 1);
+  EXPECT_TRUE(container->sharingFusions().count(&fusion1) > 0);
+  EXPECT_TRUE(container->sharingFusions().count(&fusion2) == 0);
 
   // Transfer from fusion1 to fusion2
-  container.transferFusion(&fusion1, &fusion2);
-  EXPECT_EQ(container.sharingCount(), 1);
-  EXPECT_TRUE(container.sharingFusions().count(&fusion1) == 0);
-  EXPECT_TRUE(container.sharingFusions().count(&fusion2) > 0);
+  container->transferFusion(&fusion1, &fusion2);
+  EXPECT_EQ(container->sharingCount(), 1);
+  EXPECT_TRUE(container->sharingFusions().count(&fusion1) == 0);
+  EXPECT_TRUE(container->sharingFusions().count(&fusion2) > 0);
+
+  // Clean up: remove fusion2 to avoid issues when fusions are destroyed
+  container->removeFusion(&fusion2);
 }
 
 TEST_F(Phase2ContainerTest, MultipleRegistration) {
   // Test multiple Fusions can register with same container
+  // Note: We use an IrContainer directly to test the mechanism
+  // without interference from Fusion's auto-registration
+
+  auto container = std::make_shared<IrContainer>();
+
+  // Create dummy fusion pointers for testing
   Fusion fusion1;
   Fusion fusion2;
   Fusion fusion3;
 
-  auto& container = *fusion1.ir_container();
+  container->addFusion(&fusion1);
+  container->addFusion(&fusion2);
+  container->addFusion(&fusion3);
 
-  container.addFusion(&fusion1);
-  container.addFusion(&fusion2);
-  container.addFusion(&fusion3);
-
-  EXPECT_EQ(container.sharingCount(), 3);
-  EXPECT_TRUE(container.hasMultipleFusions());
+  EXPECT_EQ(container->sharingCount(), 3);
+  EXPECT_TRUE(container->hasMultipleFusions());
 
   // Verify all are registered
-  const auto& fusions = container.sharingFusions();
+  const auto& fusions = container->sharingFusions();
   EXPECT_TRUE(fusions.count(&fusion1) > 0);
   EXPECT_TRUE(fusions.count(&fusion2) > 0);
   EXPECT_TRUE(fusions.count(&fusion3) > 0);
+
+  // Clean up: remove all to avoid issues when fusions are destroyed
+  container->removeFusion(&fusion1);
+  container->removeFusion(&fusion2);
+  container->removeFusion(&fusion3);
 }
 
 TEST_F(Phase2ContainerTest, StatementCleanup) {
-  // Test that removeFusion removes only Statements owned by that Fusion
-  // This is tricky to test directly because Statements are tied to their
-  // container at construction. We test the basic mechanism works.
+  // Test that removeFusion removes Statements owned by that Fusion
+  // This test verifies the cleanup mechanism works through the Fusion lifecycle
 
+  std::shared_ptr<IrContainer> container_ptr;
+
+  {
+    Fusion fusion;
+    FusionGuard fg(&fusion);
+
+    // Create some IR
+    auto* tv0 = makeSymbolicTensor(2);
+    fusion.addInput(tv0);
+    auto* tv1 = add(tv0, tv0);
+    fusion.addOutput(tv1);
+
+    container_ptr = fusion.ir_container_ptr();
+
+    // With Phase 2, fusion is already registered in constructor
+    EXPECT_EQ(container_ptr->sharingCount(), 1);
+    EXPECT_GT(container_ptr->vals().size(), 0);
+    EXPECT_GT(container_ptr->unordered_exprs().size(), 0);
+  }
+  // Fusion destroyed - destructor calls removeFusion which cleans up Statements
+
+  // After destruction, count should be 0 and Statements cleaned up
+  EXPECT_EQ(container_ptr->sharingCount(), 0);
+  EXPECT_EQ(container_ptr->vals().size(), 0);
+  EXPECT_EQ(container_ptr->unordered_exprs().size(), 0);
+}
+
+// =============================================================================
+// Task 3 Tests: Basic shared_ptr Transition
+// =============================================================================
+
+TEST_F(Phase2ContainerTest, BasicFusionLifecycle) {
+  // Create Fusion, add inputs/outputs, destroy - verify no crashes
+  {
+    Fusion fusion;
+    FusionGuard fg(&fusion);
+
+    auto* tv0 = makeSymbolicTensor(2);
+    fusion.addInput(tv0);
+
+    auto* tv1 = add(tv0, tv0);
+    fusion.addOutput(tv1);
+
+    // Verify container has expected contents
+    EXPECT_GT(fusion.vals().size(), 0);
+    EXPECT_GT(fusion.unordered_exprs().size(), 0);
+    EXPECT_EQ(fusion.inputs().size(), 1);
+    EXPECT_EQ(fusion.outputs().size(), 1);
+  }
+  // Fusion destroyed here - verify no crashes
+  SUCCEED();
+}
+
+TEST_F(Phase2ContainerTest, FusionAutoRegistration) {
+  // New Fusion automatically registers with its container (sharingCount == 1)
   Fusion fusion;
-  FusionGuard fg(&fusion);
-
-  // Create some IR
-  auto* tv0 = makeSymbolicTensor(2);
-  fusion.addInput(tv0);
-  auto* tv1 = add(tv0, tv0);
-  fusion.addOutput(tv1);
 
   auto& container = *fusion.ir_container();
-  size_t initial_vals = container.vals().size();
-  size_t initial_exprs = container.unordered_exprs().size();
 
-  EXPECT_GT(initial_vals, 0);
-  EXPECT_GT(initial_exprs, 0);
+  // With Phase 2 shared_ptr transition, Fusion constructor calls
+  // addFusion(this)
+  EXPECT_EQ(container.sharingCount(), 1);
+  EXPECT_FALSE(container.hasMultipleFusions());
 
-  // Register fusion
-  container.addFusion(&fusion);
+  // The registered Fusion should be our fusion
+  const auto& fusions = container.sharingFusions();
+  EXPECT_TRUE(fusions.count(&fusion) > 0);
+}
 
-  // When we remove fusion, its Statements should be cleaned up
-  // (all Statements in this test are owned by fusion)
-  container.removeFusion(&fusion);
+TEST_F(Phase2ContainerTest, FusionDestructorCleanup) {
+  // Fusion destruction unregisters and cleans up Statements
+  std::shared_ptr<IrContainer> container_ptr;
 
-  // After removal, the Statements owned by fusion should be removed
-  EXPECT_EQ(container.vals().size(), 0);
-  EXPECT_EQ(container.unordered_exprs().size(), 0);
+  {
+    Fusion fusion;
+    FusionGuard fg(&fusion);
+
+    // Create some IR
+    auto* tv0 = makeSymbolicTensor(2);
+    fusion.addInput(tv0);
+    auto* tv1 = add(tv0, tv0);
+    fusion.addOutput(tv1);
+
+    // Capture shared_ptr to container using ir_container_ptr()
+    container_ptr = fusion.ir_container_ptr();
+
+    EXPECT_EQ(container_ptr->sharingCount(), 1);
+    EXPECT_GT(container_ptr->vals().size(), 0);
+    EXPECT_GT(container_ptr->unordered_exprs().size(), 0);
+  }
+  // Fusion destroyed here - destructor calls removeFusion(this)
+
+  // After Fusion destruction, it should be unregistered
+  EXPECT_EQ(container_ptr->sharingCount(), 0);
+
+  // Statements owned by the Fusion should be cleaned up
+  EXPECT_EQ(container_ptr->vals().size(), 0);
+  EXPECT_EQ(container_ptr->unordered_exprs().size(), 0);
+}
+
+TEST_F(Phase2ContainerTest, ContainerAccessor) {
+  // Fusion::ir_container_ptr() returns valid shared_ptr
+  Fusion fusion;
+
+  // ir_container_ptr() should return a valid shared_ptr
+  auto container_ptr = fusion.ir_container_ptr();
+  EXPECT_NE(container_ptr, nullptr);
+
+  // The returned shared_ptr should point to the same container as
+  // ir_container()
+  EXPECT_EQ(container_ptr.get(), fusion.ir_container());
+
+  // We can use the shared_ptr to access container methods
+  EXPECT_EQ(container_ptr->sharingCount(), 1);
 }
 
 } // namespace nvfuser
