@@ -146,8 +146,8 @@ class AliasInfoMap {
 class NVF_API Fusion : public PolymorphicBase {
   typedef std::unordered_map<int, std::vector<int64_t>> PermutationMap;
 
- protected:
-  // Direct access to underlying container
+ public:
+  // Direct access to underlying container (for Phase 2 shared_ptr support)
   IrContainer* ir_container() {
     NVF_ERROR(
         ir_container_.get() != nullptr,
@@ -161,8 +161,6 @@ class NVF_API Fusion : public PolymorphicBase {
         "Accessing an uninitialized IrContainer!.")
     return ir_container_.get();
   }
-
- public:
   // Registration (public API with passkey)
   virtual void registerStmt(IrBuilderPasskey, Statement* stmt) {
     if (stmt->isVal()) {
