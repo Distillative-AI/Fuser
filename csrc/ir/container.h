@@ -8,6 +8,7 @@
 #pragma once
 
 #include <deque>
+#include <shared_mutex>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -67,23 +68,17 @@ class IrContainer {
   //! Return the set of Exprs registered with this fusion. Warning: This will
   //! return exprs outside inputs/outputs, so can be unsafe for use with
   //! segmented fusions.
-  const std::unordered_set<Expr*>& unordered_exprs() const noexcept {
-    return exprs_;
-  }
+  //! Note: Returns reference - caller must not hold across concurrent mods
+  const std::unordered_set<Expr*>& unordered_exprs() const noexcept;
 
   //! Return the set of Vals registered with this fusion
-  const std::unordered_set<Val*>& vals() const noexcept {
-    return vals_;
-  }
+  //! Note: Returns reference - caller must not hold across concurrent mods
+  const std::unordered_set<Val*>& vals() const noexcept;
 
-  int64_t numExprs() const noexcept {
-    return std::ssize(exprs_);
-  }
+  int64_t numExprs() const noexcept;
 
   // When include_shortcuts is true, it will count the shortcuts like true_val_.
-  int64_t numVals(bool include_shortcuts) const noexcept {
-    return include_shortcuts ? std::ssize(vals_) : std::ssize(vals_up_);
-  }
+  int64_t numVals(bool include_shortcuts) const noexcept;
 
   // Shortcuts for frequently used vals
   NVF_API Val* zeroVal();
@@ -105,6 +100,10 @@ class IrContainer {
   void assumeNonNegative(Val* val);
 
  protected:
+  // Mutex for thread-safe access when container is shared between Fusions
+  // mutable because we need to lock in const methods
+  mutable std::shared_mutex mutex_;
+
   static IrCloner copy(const IrContainer* from, IrContainer* to);
 
   static void swap(IrContainer& a, IrContainer& b) noexcept;
