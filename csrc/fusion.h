@@ -744,7 +744,7 @@ T* IrBuilder::clone(const T* src, IrCloner* ir_cloner) {
 
   dest_container->registerStmt(IrBuilderPasskey(dest_container), dest_stmt);
 
-  if (src_container != dest_container) {
+  if (src_container->ir_container() != dest_container->ir_container()) {
     dest_stmt->setName(IrBuilderPasskey(dest_container), src_stmt->name());
   }
 
