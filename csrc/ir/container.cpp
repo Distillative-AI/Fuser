@@ -7,6 +7,7 @@
 // clang-format on
 #include "ir/container.h"
 
+#include "fusion.h"
 #include "instrumentation.h"
 #include "ir/base_nodes.h"
 #include "ir/builder.h"
@@ -193,28 +194,9 @@ void IrContainer::removeStatementsOwnedByUnlocked(Fusion* fusion) {
     }
   }
 
-  // Also check shortcut vals - they're stored separately but still in vals_
-  // Only remove them if owned by this fusion
-  if (zero_val_ && zero_val_->container() == fusion) {
-    vals_.erase(zero_val_.get());
-    zero_val_.reset();
-  }
-  if (one_val_ && one_val_->container() == fusion) {
-    vals_.erase(one_val_.get());
-    one_val_.reset();
-  }
-  if (true_val_ && true_val_->container() == fusion) {
-    vals_.erase(true_val_.get());
-    true_val_.reset();
-  }
-  if (false_val_ && false_val_->container() == fusion) {
-    vals_.erase(false_val_.get());
-    false_val_.reset();
-  }
-  if (magic_zero_val_ && magic_zero_val_->container() == fusion) {
-    vals_.erase(magic_zero_val_.get());
-    magic_zero_val_.reset();
-  }
+  // Note: Special values (zero_val_, one_val_, etc.) are now per-Fusion,
+  // stored in Fusion class, not in IrContainer. They are registered as
+  // normal vals in vals_up_ and removed by the loop above.
 
   // Remove all Exprs owned by this Fusion
   for (auto it = exprs_up_.begin(); it != exprs_up_.end();) {
@@ -256,11 +238,8 @@ void IrContainer::swap(IrContainer& a, IrContainer& b) noexcept {
 
   std::swap(a.parent_, b.parent_);
 
-  std::swap(a.zero_val_, b.zero_val_);
-  std::swap(a.one_val_, b.one_val_);
-  std::swap(a.true_val_, b.true_val_);
-  std::swap(a.false_val_, b.false_val_);
-  std::swap(a.magic_zero_val_, b.magic_zero_val_);
+  // Note: Special values (zero_val_, one_val_, etc.) are now per-Fusion,
+  // not per-IrContainer. They are swapped as part of the Fusion-level swap.
   std::swap(a.axioms_, b.axioms_);
   std::swap(a.sharing_fusions_, b.sharing_fusions_);
 }
@@ -359,12 +338,9 @@ void IrContainer::removeExpr(Expr* expr) {
 //! Completely remove val from the fusion, break all dependencies associated
 //! with it
 void IrContainer::removeVal(Val* val) {
-  // Don't remove shortcuts
-  if (val == true_val_.get() || val == false_val_.get() ||
-      val == one_val_.get() || val == zero_val_.get() ||
-      val == magic_zero_val_.get()) {
-    return;
-  }
+  // Note: Special values (zero_val_, one_val_, etc.) are now per-Fusion,
+  // stored in Fusion class. They are registered as normal vals and can
+  // be removed like any other val.
 
   NVF_ERROR(
       vals_.find(val) != vals_.end(),
@@ -474,84 +450,9 @@ bool IrContainer::inContainer(const Statement* const_stmt) const {
   return true;
 }
 
-// Shortcuts for frequently used vals
-Val* IrContainer::zeroVal() {
-  if (!zero_val_) {
-    auto zero_val =
-        IrBuilder::createInContainer<Val>(this->parent(), 0L, DataType::Index);
-    NVF_ERROR(vals_up_.back().get() == zero_val);
-    zero_val_ = std::unique_ptr<Val>(vals_up_.back().release());
-    vals_up_.pop_back();
-  }
-  return zero_val_.get();
-}
-
-Val* IrContainer::zeroVal(DataType dtype) {
-  if (dtype == DataType::Index) {
-    return zeroVal();
-  } else if (isBooleanType(dtype)) {
-    return falseVal();
-  } else {
-    // NOTE: this does not cache values
-    return IrBuilder::createInContainer<Val>(this->parent(), 0L, dtype);
-  }
-}
-
-Val* IrContainer::oneVal() {
-  if (!one_val_) {
-    auto one_val =
-        IrBuilder::createInContainer<Val>(this->parent(), 1L, DataType::Index);
-    NVF_ERROR(vals_up_.back().get() == one_val);
-    one_val_ = std::unique_ptr<Val>(vals_up_.back().release());
-    vals_up_.pop_back();
-  }
-  return one_val_.get();
-}
-
-Val* IrContainer::oneVal(DataType dtype) {
-  if (dtype == DataType::Index) {
-    return oneVal();
-  } else if (isBooleanType(dtype)) {
-    return trueVal();
-  } else {
-    // NOTE: this does not cache values
-    return IrBuilder::createInContainer<Val>(this->parent(), 1L, dtype);
-  }
-}
-
-Val* IrContainer::falseVal() {
-  if (!false_val_) {
-    auto false_val = IrBuilder::createInContainer<Val>(
-        this->parent(), false, DataType::Bool);
-    NVF_ERROR(vals_up_.back().get() == false_val);
-    false_val_ = std::unique_ptr<Val>(vals_up_.back().release());
-    vals_up_.pop_back();
-  }
-  return false_val_.get();
-}
-
-Val* IrContainer::trueVal() {
-  if (!true_val_) {
-    auto true_val =
-        IrBuilder::createInContainer<Val>(this->parent(), true, DataType::Bool);
-    NVF_ERROR(vals_up_.back().get() == true_val);
-    true_val_ = std::unique_ptr<Val>(vals_up_.back().release());
-    vals_up_.pop_back();
-  }
-  return true_val_.get();
-}
-
-NamedScalar* IrContainer::magicZeroVal() {
-  if (!magic_zero_val_) {
-    auto magic_zero =
-        IrBuilder::create<NamedScalar>(kMagicZeroName, DataType::Index);
-    NVF_ERROR(vals_up_.back().get() == magic_zero);
-    magic_zero_val_ = std::unique_ptr<NamedScalar>(
-        vals_up_.back().release()->as<NamedScalar>());
-    vals_up_.pop_back();
-  }
-  return magic_zero_val_.get();
-}
+// Note: Shortcut values (zeroVal, oneVal, trueVal, falseVal, magicZeroVal)
+// are now per-Fusion. Use Fusion::zeroVal() etc. instead.
+// This avoids ownership conflicts when multiple Fusions share an IrContainer.
 
 Val* IrContainer::metadataOf(Val* v) {
   if (metadata_.count(v) == 0) {
@@ -568,7 +469,8 @@ void IrContainer::lazyInitAxioms() {
   if (!axioms_) {
     axioms_ = std::make_unique<std::vector<Val*>>();
     axioms_->reserve(kParallelTypeThreads.size() * 3);
-    auto zero = zeroVal();
+    // Use parent()->zeroVal() since special values are now per-Fusion
+    auto zero = parent()->zeroVal();
     for (auto p : kParallelTypeThreads) {
       auto pidx = NamedScalar::getParallelIndex(p);
       auto pdim = NamedScalar::getParallelDim(p);
@@ -582,13 +484,15 @@ void IrContainer::lazyInitAxioms() {
 void IrContainer::assumePositive(Val* val) {
   NVF_ERROR(val->container() == this->parent());
   lazyInitAxioms();
-  axioms_->emplace_back(IrBuilder::gtExpr(val, zeroVal()));
+  // Use parent()->zeroVal() since special values are now per-Fusion
+  axioms_->emplace_back(IrBuilder::gtExpr(val, parent()->zeroVal()));
 }
 
 void IrContainer::assumeNonNegative(Val* val) {
   NVF_ERROR(val->container() == this->parent());
   lazyInitAxioms();
-  axioms_->emplace_back(IrBuilder::geExpr(val, zeroVal()));
+  // Use parent()->zeroVal() since special values are now per-Fusion
+  axioms_->emplace_back(IrBuilder::geExpr(val, parent()->zeroVal()));
 }
 
 void IrContainer::removeStatementsCreatedAfter(

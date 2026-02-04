@@ -515,4 +515,181 @@ TEST_F(Phase2ContainerTest, RemoveStatementsOwnedByAPI) {
   EXPECT_EQ(container.unordered_exprs().size(), 0);
 }
 
+// =============================================================================
+// Task 7 Tests: Per-Fusion Special Values
+// =============================================================================
+
+TEST_F(Phase2ContainerTest, PerFusionSpecialValuesBasic) {
+  // Test that special values are created per-Fusion
+  Fusion a;
+  FusionGuard fg_a(&a);
+  Val* zero_a = a.zeroVal();
+  Val* one_a = a.oneVal();
+
+  EXPECT_NE(zero_a, nullptr);
+  EXPECT_NE(one_a, nullptr);
+  EXPECT_EQ(zero_a->container(), &a);
+  EXPECT_EQ(one_a->container(), &a);
+}
+
+TEST_F(Phase2ContainerTest, SpecialValuesOwnedByFusion) {
+  // Test that special values are tracked in ownedVals
+  Fusion a;
+  FusionGuard fg_a(&a);
+
+  Val* zero_a = a.zeroVal();
+
+  // Special values should be in ownedVals
+  EXPECT_TRUE(a.ownedVals().count(zero_a) > 0);
+}
+
+TEST_F(Phase2ContainerTest, SeparateFusionsHaveOwnSpecialValues) {
+  // Two independent Fusions should have different special values
+  Fusion a;
+  Fusion b;
+
+  {
+    FusionGuard fg_a(&a);
+    Val* zero_a = a.zeroVal();
+    EXPECT_EQ(zero_a->container(), &a);
+  }
+
+  {
+    FusionGuard fg_b(&b);
+    Val* zero_b = b.zeroVal();
+    EXPECT_EQ(zero_b->container(), &b);
+  }
+
+  // Each has its own zero (different objects)
+  EXPECT_NE(a.zeroVal(), b.zeroVal());
+}
+
+TEST_F(Phase2ContainerTest, DestroyFusionDoesNotAffectOther) {
+  // Destroying one Fusion should not affect another's special values
+  Fusion a;
+  FusionGuard fg_a(&a);
+
+  // Create special values in a
+  Val* zero_a = a.zeroVal();
+  EXPECT_NE(zero_a, nullptr);
+
+  {
+    Fusion b;
+    FusionGuard fg_b(&b);
+    Val* zero_b = b.zeroVal();
+    EXPECT_NE(zero_b, nullptr);
+    // b destroyed here
+  }
+
+  // a should still work fine - its special values should still be valid
+  Val* zero_a_again = a.zeroVal();
+  EXPECT_EQ(zero_a_again, zero_a);
+  EXPECT_EQ(zero_a_again->container(), &a);
+}
+
+TEST_F(Phase2ContainerTest, SpecialValuesLazyCreation) {
+  // Special values should be created lazily
+  Fusion a;
+  FusionGuard fg_a(&a);
+
+  // Before calling zeroVal(), it shouldn't exist
+  // (Can't directly test this, but we can verify it works after call)
+  Val* zero1 = a.zeroVal();
+  Val* zero2 = a.zeroVal();
+
+  // Same value returned on repeated calls
+  EXPECT_EQ(zero1, zero2);
+}
+
+TEST_F(Phase2ContainerTest, AllSpecialValuesPerFusion) {
+  // Test all special value accessors
+  Fusion a;
+  FusionGuard fg_a(&a);
+
+  Val* zero = a.zeroVal();
+  Val* one = a.oneVal();
+  Val* true_val = a.trueVal();
+  Val* false_val = a.falseVal();
+  NamedScalar* magic_zero = a.magicZeroVal();
+
+  // All should be non-null
+  EXPECT_NE(zero, nullptr);
+  EXPECT_NE(one, nullptr);
+  EXPECT_NE(true_val, nullptr);
+  EXPECT_NE(false_val, nullptr);
+  EXPECT_NE(magic_zero, nullptr);
+
+  // All should have container() == &a
+  EXPECT_EQ(zero->container(), &a);
+  EXPECT_EQ(one->container(), &a);
+  EXPECT_EQ(true_val->container(), &a);
+  EXPECT_EQ(false_val->container(), &a);
+  EXPECT_EQ(magic_zero->container(), &a);
+
+  // All should be tracked in ownedVals
+  EXPECT_TRUE(a.ownedVals().count(zero) > 0);
+  EXPECT_TRUE(a.ownedVals().count(one) > 0);
+  EXPECT_TRUE(a.ownedVals().count(true_val) > 0);
+  EXPECT_TRUE(a.ownedVals().count(false_val) > 0);
+  EXPECT_TRUE(a.ownedVals().count(magic_zero) > 0);
+}
+
+TEST_F(Phase2ContainerTest, SpecialValuesClearedOnFusionClear) {
+  // Test that Fusion::clear() resets special values
+  Fusion a;
+  FusionGuard fg_a(&a);
+
+  // Create special values
+  Val* zero_before = a.zeroVal();
+  Val* one_before = a.oneVal();
+  EXPECT_NE(zero_before, nullptr);
+  EXPECT_NE(one_before, nullptr);
+
+  // Clear the fusion
+  a.clear();
+
+  // Special values should be recreated lazily (new objects)
+  Val* zero_after = a.zeroVal();
+  Val* one_after = a.oneVal();
+
+  // The new objects should be different from the old ones
+  // (old ones were removed by removeStatementsOwnedBy)
+  EXPECT_NE(zero_after, zero_before);
+  EXPECT_NE(one_after, one_before);
+
+  // New objects should be valid and owned by the fusion
+  EXPECT_EQ(zero_after->container(), &a);
+  EXPECT_EQ(one_after->container(), &a);
+}
+
+TEST_F(Phase2ContainerTest, SpecialValuesWithDtype) {
+  // Test zeroVal(dtype) and oneVal(dtype) accessors
+  Fusion a;
+  FusionGuard fg_a(&a);
+
+  // Index type should return the cached value
+  Val* zero_index = a.zeroVal(DataType::Index);
+  Val* zero_cached = a.zeroVal();
+  EXPECT_EQ(zero_index, zero_cached);
+
+  Val* one_index = a.oneVal(DataType::Index);
+  Val* one_cached = a.oneVal();
+  EXPECT_EQ(one_index, one_cached);
+
+  // Bool type should return true/false val
+  Val* zero_bool = a.zeroVal(DataType::Bool);
+  Val* false_cached = a.falseVal();
+  EXPECT_EQ(zero_bool, false_cached);
+
+  Val* one_bool = a.oneVal(DataType::Bool);
+  Val* true_cached = a.trueVal();
+  EXPECT_EQ(one_bool, true_cached);
+
+  // Other types should create new values (not cached)
+  Val* zero_float = a.zeroVal(DataType::Float);
+  Val* zero_float2 = a.zeroVal(DataType::Float);
+  // These are not cached, so they're different objects
+  EXPECT_NE(zero_float, zero_float2);
+}
+
 } // namespace nvfuser
