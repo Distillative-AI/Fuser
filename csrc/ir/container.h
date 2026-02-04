@@ -83,20 +83,10 @@ class IrContainer {
   // This parameter is kept for API compatibility but has no effect.
   int64_t numVals(bool include_shortcuts) const noexcept;
 
-  // Note: Shortcut values (zeroVal, oneVal, trueVal, falseVal, magicZeroVal)
-  // are now per-Fusion. Use Fusion::zeroVal() etc. instead.
+  // Note: Shortcut values (zeroVal, oneVal, trueVal, falseVal, magicZeroVal),
+  // metadata, and axioms are now per-Fusion. Use Fusion::zeroVal(),
+  // Fusion::metadataOf(), Fusion::axioms(), etc. instead.
   // This avoids ownership conflicts when multiple Fusions share an IrContainer.
-
-  Val* metadataOf(Val*);
-
-  // Axioms about CUDA programming, for example: threadIdx.x < blockDim.x
-  const std::vector<Val*>& axioms() {
-    lazyInitAxioms();
-    return *axioms_;
-  }
-
-  void assumePositive(Val* val);
-  void assumeNonNegative(Val* val);
 
  public:
   // =========================================================================
@@ -192,8 +182,6 @@ class IrContainer {
 
   void clear() noexcept;
 
-  void lazyInitAxioms();
-
   friend class StatementGuard;
 
   // A simple garbage collection mechanism to remove all Exprs and Vals that
@@ -229,10 +217,8 @@ class IrContainer {
   // Note: Special values (zero_val_, one_val_, true_val_, false_val_,
   // magic_zero_val_) are now per-Fusion, stored in Fusion class.
   // This avoids ownership conflicts when multiple Fusions share an IrContainer.
-  // See Fusion::zeroVal(), etc. for the per-Fusion implementation.
-
-  std::unique_ptr<std::vector<Val*>> axioms_;
-  std::unordered_map<Val*, std::pair<Val*, Expr*>> metadata_;
+  // See Fusion::zeroVal(), Fusion::axioms(), Fusion::metadataOf(), etc.
+  // for the per-Fusion implementations.
 
  public:
   Fusion* parent() const {
